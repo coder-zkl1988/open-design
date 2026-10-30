@@ -134,6 +134,13 @@ export async function runElectronBuilder(
       electronLanguages: MAC_ELECTRON_LANGUAGES,
       entitlements: config.signed ? macResources.entitlements : undefined,
       entitlementsInherit: config.signed ? macResources.entitlementsInherit : undefined,
+      // The packaged outer launches as a short-lived delegating process. Start
+      // every bundle as an agent so LaunchServices cannot create a Dock tile
+      // before the entrypoint applies its runtime activation policy; the
+      // payload promotes itself to a regular application after whenReady().
+      extendInfo: {
+        LSUIElement: true,
+      },
       gatekeeperAssess: false,
       hardenedRuntime: config.signed,
       icon: macResources.icon,

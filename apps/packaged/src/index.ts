@@ -115,7 +115,35 @@ function applyPackagedUpdaterEnv(updateMetadataUrl: string | null): void {
   process.env.OD_UPDATE_METADATA_URL = updateMetadataUrl;
 }
 
+// Set in main() before the first await on darwin: this process starts as a
+// delegating launcher and must not own a macOS Dock tile while it does (see
+// the suppression comment at the top of main()).
+let dockSuppressedAtStartup = false;
+
 async function main(): Promise<void> {
+  // A delegating outer checks in with LaunchServices as a regular app during
+  // Electron init, then exits leaving the payload desktop running behind it.
+  // LaunchServices keeps that exited record alive (exited-with-subordinates)
+  // and the Dock renders a dead second tile. Hide the tile before the first
+  // await so the suppression lands ahead of the check-in, and restore it once
+  // this process commits to running a UI of its own (after whenReady below).
+  try {
+    dockSuppressedAtStartup = process.platform === "darwin" && app.dock != null;
+    if (dockSuppressedAtStartup) {
+      // Hiding the dock tile alone still lets LaunchServices register this
+      // short-lived outer as an application. Prohibited activation keeps the
+      // delegating outer out of the Dock while the payload desktop takes
+      // ownership; the payload later promotes itself to regular.
+      app.setActivationPolicy("prohibited");
+      app.dock?.hide();
+    }
+    process.stderr.write(
+      `[od-dock-diag] main-top ready=${app.isReady()} dock=${typeof app.dock} suppressed=${dockSuppressedAtStartup}\n`,
+    );
+  } catch (error) {
+    dockSuppressedAtStartup = false;
+    process.stderr.write(`[od-dock-diag] main-top threw: ${String(error)}\n`);
+  }
   const config = await readPackagedConfig();
   const headlessRequest = parsePackagedHeadlessRequest(process.argv.slice(1));
 
@@ -261,6 +289,9 @@ async function main(): Promise<void> {
     app.exit(0);
     return;
   }
+  process.stderr.write(
+    `[od-dock-diag] delegation fell through; ready=${app.isReady()} dock=${typeof app.dock}\n`,
+  );
   const activeConfig = launcherRuntime.config;
   const paths = launcherRuntime.paths;
   const mcpBootstrap = resolvePackagedMcpBootstrapLaunch({
@@ -339,6 +370,10 @@ async function main(): Promise<void> {
     return;
   }
   await app.whenReady();
+  if (dockSuppressedAtStartup) {
+    app.setActivationPolicy("regular");
+    app.dock?.show();
+  }
   const electronReadyAtMs = performance.now();
   packagedStartupTiming?.mark("electron_ready");
 
